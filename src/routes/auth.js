@@ -121,4 +121,29 @@ router.get("/me", async (req, res) => {
   }
 })
 
+// Logout
+router.post("/logout", async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(" ")[1]
+
+    if (!token) {
+      return res.status(401).json({ error: "Not authorized" })
+    }
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET)
+    const user = await User.findById(decoded.id)
+
+    if (!user) {
+      return res.status(401).json({ error: "User not found" })
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Logged out successfully"
+    })
+  } catch (error) {
+    res.status(500).json({ error: "Logout error" })
+  }
+})
+
 export default router
