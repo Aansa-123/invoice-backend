@@ -2,9 +2,9 @@ import mongoose from "mongoose"
 
 const companySettingsSchema = new mongoose.Schema(
   {
-    userId: {
+    organizationId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
+      ref: "Organization",
       required: true,
       unique: true,
     },
@@ -26,6 +26,23 @@ const companySettingsSchema = new mongoose.Schema(
     logo: {
       type: String,
       default: null,
+    },
+    // Invoice Settings
+    currency: {
+      type: String,
+      default: "USD",
+    },
+    taxPercentage: {
+      type: Number,
+      default: 0,
+    },
+    invoicePrefix: {
+      type: String,
+      default: "INV",
+    },
+    paymentTerms: {
+      type: String,
+      default: "Due on Receipt",
     },
   },
   { timestamps: true },

@@ -7,6 +7,11 @@ const clientSchema = new mongoose.Schema(
       ref: "User",
       required: true,
     },
+    organizationId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Organization",
+      required: true,
+    },
     name: {
       type: String,
       required: [true, "Please provide client name"],

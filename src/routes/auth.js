@@ -2,6 +2,8 @@ import express from "express"
 import User from "../models/User.js"
 import jwt from "jsonwebtoken"
 import CompanySettings from "../models/CompanySettings.js"
+import Organization from "../models/Organization.js"
+import { protect } from "../middleware/auth.js"
 
 const router = express.Router()
 
@@ -15,7 +17,7 @@ const generateToken = (id) => {
 // Register
 router.post("/register", async (req, res) => {
   try {
-    const { name, email, password } = req.body
+    const { name, email, password, businessName } = req.body
 
     // Validate input
     if (!name || !email || !password) {
@@ -35,15 +37,6 @@ router.post("/register", async (req, res) => {
       password,
     })
 
-    // Create default company settings
-    await CompanySettings.create({
-      userId: user._id,
-      businessName: name,
-      address: "",
-      phone: "",
-      email: email,
-    })
-
     const token = generateToken(user._id)
 
     res.status(201).json({
@@ -53,7 +46,9 @@ router.post("/register", async (req, res) => {
         id: user._id,
         name: user.name,
         email: user.email,
+        currentOrganization: null,
       },
+      redirect: "/setup"
     })
   } catch (error) {
     res.status(500).json({ error: error.message })
@@ -77,6 +72,11 @@ router.post("/login", async (req, res) => {
       return res.status(401).json({ error: "Invalid credentials" })
     }
 
+    // Check if user is disabled
+    if (user.status === "Disabled") {
+      return res.status(403).json({ error: "Your account has been disabled. Please contact your administrator." })
+    }
+
     // Check if password matches
     const isMatch = await user.matchPassword(password)
 
@@ -86,6 +86,17 @@ router.post("/login", async (req, res) => {
 
     const token = generateToken(user._id)
 
+    // Find role for current organization
+    let role = "Owner" // Default for new users
+    if (user.currentOrganization && user.organizations) {
+      const membership = user.organizations.find(
+        (o) => o.organizationId?.toString() === user.currentOrganization.toString()
+      )
+      if (membership) role = membership.role
+    } else if (user.organizations && user.organizations.length > 0) {
+      role = user.organizations[0].role
+    }
+
     res.status(200).json({
       success: true,
       token,
@@ -93,6 +104,8 @@ router.post("/login", async (req, res) => {
         id: user._id,
         name: user.name,
         email: user.email,
+        currentOrganization: user.currentOrganization,
+        role,
       },
     })
   } catch (error) {
@@ -112,9 +125,26 @@ router.get("/me", async (req, res) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET)
     const user = await User.findById(decoded.id)
 
+    if (!user) {
+      return res.status(401).json({ error: "User not found" })
+    }
+
+    let role = "Owner"
+    if (user.currentOrganization && user.organizations) {
+      const membership = user.organizations.find(
+        (o) => o.organizationId?.toString() === user.currentOrganization.toString()
+      )
+      if (membership) role = membership.role
+    } else if (user.organizations && user.organizations.length > 0) {
+      role = user.organizations[0].role
+    }
+
     res.status(200).json({
       success: true,
-      user,
+      user: {
+        ...user.toObject(),
+        role
+      },
     })
   } catch (error) {
     res.status(500).json({ error: "erorr in me route" })
@@ -143,6 +173,29 @@ router.post("/logout", async (req, res) => {
     })
   } catch (error) {
     res.status(500).json({ error: "Logout error" })
+  }
+})
+
+// Change password
+router.put("/change-password", protect, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body
+
+    const user = await User.findById(req.user._id).select("+password")
+
+    if (!(await user.matchPassword(currentPassword))) {
+      return res.status(401).json({ error: "Current password is incorrect" })
+    }
+
+    user.password = newPassword
+    await user.save()
+
+    res.status(200).json({
+      success: true,
+      message: "Password updated successfully",
+    })
+  } catch (error) {
+    res.status(500).json({ error: error.message })
   }
 })
 

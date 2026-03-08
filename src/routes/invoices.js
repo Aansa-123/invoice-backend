@@ -3,21 +3,24 @@ import Invoice from "../models/Invoice.js"
 import Client from "../models/Client.js"
 import CompanySettings from "../models/CompanySettings.js"
 import { protect } from "../middleware/auth.js"
+import { authorize } from "../middleware/rbac.js"
+import { checkPlanLimits } from "../middleware/planLimits.js"
 import generateInvoicePDF from "../services/pdfGenerator.js"
+import { logActivity } from "../services/logger.js"
 
 const router = express.Router()
 
-// Generate invoice number per user
-async function generateInvoiceNumber(userId) {
+// Generate invoice number per organization
+async function generateInvoiceNumber(organizationId) {
   const now = new Date();
   const year = now.getFullYear();
   const month = String(now.getMonth() + 1).padStart(2, "0");
-  const shortUserId = userId.substring(0, 6);
-  const prefix = `INV-${shortUserId}-${year}${month}-`;
+  const shortOrgId = organizationId.toString().substring(0, 6);
+  const prefix = `INV-${shortOrgId}-${year}${month}-`;
 
-  // Find the highest invoice number for this user and current month
+  // Find the highest invoice number for this organization and current month
   const lastInvoice = await Invoice.findOne({
-    userId,
+    organizationId,
     invoiceNumber: { $regex: `^${prefix}` }
   }).sort({ invoiceNumber: -1 });
 
@@ -33,11 +36,11 @@ async function generateInvoiceNumber(userId) {
 }
 
 
-// Get all invoices for user
+// Get all invoices for organization
 router.get("/", protect, async (req, res) => {
   try {
     const { status, startDate, endDate } = req.query
-    const query = { userId: req.user.id }
+    const query = { organizationId: req.user.currentOrganization }
 
     if (status) {
       query.status = status
@@ -51,13 +54,14 @@ router.get("/", protect, async (req, res) => {
 
     const invoices = await Invoice.find(query).populate("clientId").sort({ invoiceDate: -1 })
 
-    // Update overdue status
+    // Update overdue status and save if needed
     const now = new Date()
-    invoices.forEach((invoice) => {
-      if (invoice.status !== "Paid" && invoice.dueDate < now) {
+    for (const invoice of invoices) {
+      if (invoice.status !== "Paid" && invoice.dueDate < now && invoice.status !== "Overdue") {
         invoice.status = "Overdue"
+        await invoice.save()
       }
-    })
+    }
 
     res.status(200).json({
       success: true,
@@ -78,8 +82,8 @@ router.get("/:id", protect, async (req, res) => {
       return res.status(404).json({ error: "Invoice not found" })
     }
 
-    if (invoice.userId.toString() !== req.user.id) {
-      return res.status(403).json({ error: "Not authorized" })
+    if (invoice.organizationId.toString() !== req.user.currentOrganization.toString()) {
+      return res.status(403).json({ error: "Not authorized to access this invoice" })
     }
 
     res.status(200).json({
@@ -92,9 +96,9 @@ router.get("/:id", protect, async (req, res) => {
 })
 
 // Create invoice
-router.post("/", protect, async (req, res) => {
+router.post("/", protect, authorize("Owner", "Admin", "Accountant"), checkPlanLimits, async (req, res) => {
   try {
-    const { clientId, items, tax, discount, dueDate, notes } = req.body
+    const { clientId, items, tax, discount, dueDate, invoiceDate, notes } = req.body
 
     // Validation
     if (!clientId || clientId.trim() === "") {
@@ -123,10 +127,10 @@ router.post("/", protect, async (req, res) => {
       }
     }
 
-    // Verify client exists and belongs to user
+    // Verify client exists and belongs to the organization
     const client = await Client.findById(clientId)
-    if (!client || client.userId.toString() !== req.user.id) {
-      return res.status(403).json({ error: "Invalid client" })
+    if (!client || client.organizationId.toString() !== req.user.currentOrganization.toString()) {
+      return res.status(403).json({ error: "Invalid client for this organization" })
     }
 
     // Validate tax and discount
@@ -145,10 +149,11 @@ router.post("/", protect, async (req, res) => {
     const subtotal = items.reduce((sum, item) => sum + item.quantity * item.price, 0)
     const total = subtotal + taxValue - discountValue
 
-    const invoiceNumber = await generateInvoiceNumber(req.user.id)
+    const invoiceNumber = await generateInvoiceNumber(req.user.currentOrganization)
 
     const invoice = await Invoice.create({
-      userId: req.user.id,
+      userId: req.user._id,
+      organizationId: req.user.currentOrganization,
       invoiceNumber,
       clientId,
       items,
@@ -156,11 +161,22 @@ router.post("/", protect, async (req, res) => {
       tax: taxValue,
       discount: discountValue,
       total,
+      invoiceDate: invoiceDate || Date.now(),
       dueDate,
       notes: notes || "",
     })
 
     const populatedInvoice = await Invoice.findById(invoice._id).populate("clientId")
+
+    // Log activity
+    await logActivity({
+      userId: req.user._id,
+      organizationId: req.user.currentOrganization,
+      action: `Created invoice ${invoice.invoiceNumber}`,
+      module: "Invoices",
+      details: `New invoice for client ${populatedInvoice.clientId?.name}`,
+      metadata: { invoiceId: invoice._id }
+    })
 
     res.status(201).json({
       success: true,
@@ -173,7 +189,7 @@ router.post("/", protect, async (req, res) => {
 })
 
 // Update invoice
-router.put("/:id", protect, async (req, res) => {
+router.put("/:id", protect, authorize("Owner", "Admin", "Accountant"), async (req, res) => {
   try {
     const invoice = await Invoice.findById(req.params.id)
 
@@ -181,61 +197,54 @@ router.put("/:id", protect, async (req, res) => {
       return res.status(404).json({ error: "Invoice not found" })
     }
 
-    if (invoice.userId.toString() !== req.user.id) {
-      return res.status(403).json({ error: "Not authorized" })
+    if (invoice.organizationId.toString() !== req.user.currentOrganization.toString()) {
+      return res.status(403).json({ error: "Not authorized to update this invoice" })
     }
 
-    const { items, tax, discount } = req.body
+    const { clientId, items, tax, discount, dueDate, notes } = req.body
+
+    // Cannot edit Paid invoices
+    if (invoice.status === "Paid") {
+      return res.status(400).json({ error: "Cannot edit a paid invoice" })
+    }
+
+    if (clientId) {
+      const client = await Client.findById(clientId)
+      if (!client || client.organizationId.toString() !== req.user.currentOrganization.toString()) {
+        return res.status(403).json({ error: "Invalid client for this organization" })
+      }
+      invoice.clientId = clientId
+    }
 
     if (items) {
+      // Validate items price
+      for (const item of items) {
+        if (item.price <= 0) {
+          return res.status(400).json({ error: "Item price must be greater than 0" })
+        }
+      }
       invoice.items = items
       invoice.subtotal = items.reduce((sum, item) => sum + item.quantity * item.price, 0)
     }
 
     if (tax !== undefined) {
-      invoice.tax = tax
+      invoice.tax = Number(tax) || 0
     }
 
     if (discount !== undefined) {
-      invoice.discount = discount
+      invoice.discount = Number(discount) || 0
     }
 
     invoice.total = invoice.subtotal + invoice.tax - invoice.discount
 
-    Object.assign(invoice, req.body)
-    await invoice.save()
+    // invoiceDate is read-only according to requirements
+    if (dueDate) invoice.dueDate = dueDate
+    
+    // Automatically set status to Pending on update
+    invoice.status = "Pending"
+    
+    if (notes !== undefined) invoice.notes = notes
 
-    const populatedInvoice = await Invoice.findById(invoice._id).populate("clientId")
-
-    res.status(200).json({
-      success: true,
-      data: populatedInvoice,
-    })
-  } catch (error) {
-    res.status(400).json({ error: error.message })
-  }
-})
-
-// Update invoice status
-router.patch("/:id/status", protect, async (req, res) => {
-  try {
-    const invoice = await Invoice.findById(req.params.id)
-
-    if (!invoice) {
-      return res.status(404).json({ error: "Invoice not found" })
-    }
-
-    if (invoice.userId.toString() !== req.user.id) {
-      return res.status(403).json({ error: "Not authorized" })
-    }
-
-    const { status } = req.body
-
-    if (!["Paid", "Pending", "Overdue"].includes(status)) {
-      return res.status(400).json({ error: "Invalid status" })
-    }
-
-    invoice.status = status
     await invoice.save()
 
     const populatedInvoice = await Invoice.findById(invoice._id).populate("clientId")
@@ -250,7 +259,7 @@ router.patch("/:id/status", protect, async (req, res) => {
 })
 
 // Delete invoice
-router.delete("/:id", protect, async (req, res) => {
+router.delete("/:id", protect, authorize("Owner", "Admin"), async (req, res) => {
   try {
     const invoice = await Invoice.findById(req.params.id)
 
@@ -258,11 +267,20 @@ router.delete("/:id", protect, async (req, res) => {
       return res.status(404).json({ error: "Invoice not found" })
     }
 
-    if (invoice.userId.toString() !== req.user.id) {
-      return res.status(403).json({ error: "Not authorized" })
+    if (invoice.organizationId.toString() !== req.user.currentOrganization.toString()) {
+      return res.status(403).json({ error: "Not authorized to delete this invoice" })
     }
 
     await Invoice.findByIdAndDelete(req.params.id)
+
+    // Log activity
+    await logActivity({
+      userId: req.user._id,
+      organizationId: req.user.currentOrganization,
+      action: `Deleted invoice ${invoice.invoiceNumber}`,
+      module: "Invoices",
+      metadata: { invoiceNumber: invoice.invoiceNumber }
+    })
 
     res.status(200).json({
       success: true,
@@ -270,6 +288,41 @@ router.delete("/:id", protect, async (req, res) => {
     })
   } catch (error) {
     res.status(500).json({ error: error.message })
+  }
+})
+
+// Update invoice status
+router.patch("/:id/status", protect, authorize("Owner", "Admin", "Accountant"), async (req, res) => {
+  try {
+    const { status } = req.body
+    const invoice = await Invoice.findById(req.params.id)
+
+    if (!invoice) {
+      return res.status(404).json({ error: "Invoice not found" })
+    }
+
+    if (invoice.organizationId.toString() !== req.user.currentOrganization.toString()) {
+      return res.status(403).json({ error: "Not authorized to update this invoice" })
+    }
+
+    invoice.status = status
+    await invoice.save()
+
+    // Log activity
+    await logActivity({
+      userId: req.user._id,
+      organizationId: req.user.currentOrganization,
+      action: `Updated status of invoice ${invoice.invoiceNumber} to ${status}`,
+      module: "Invoices",
+      metadata: { invoiceId: invoice._id, status }
+    })
+
+    res.status(200).json({
+      success: true,
+      data: invoice,
+    })
+  } catch (error) {
+    res.status(400).json({ error: error.message })
   }
 })
 
@@ -282,11 +335,11 @@ router.get("/:id/pdf", protect, async (req, res) => {
       return res.status(404).json({ error: "Invoice not found" })
     }
 
-    if (invoice.userId.toString() !== req.user.id) {
-      return res.status(403).json({ error: "Not authorized" })
+    if (invoice.organizationId.toString() !== req.user.currentOrganization.toString()) {
+      return res.status(403).json({ error: "Not authorized to access this invoice" })
     }
 
-    const company = await CompanySettings.findOne({ userId: req.user.id })
+    const company = await CompanySettings.findOne({ organizationId: req.user.currentOrganization })
 
     const pdfBuffer = await generateInvoicePDF(invoice, company || {})
 

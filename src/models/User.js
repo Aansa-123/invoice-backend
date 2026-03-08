@@ -21,6 +21,28 @@ const userSchema = new mongoose.Schema(
       minlength: 6,
       select: false,
     },
+    organizations: [
+      {
+        organizationId: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "Organization",
+        },
+        role: {
+          type: String,
+          enum: ["Owner", "Admin", "Accountant", "Viewer"],
+          default: "Viewer",
+        },
+      },
+    ],
+    currentOrganization: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Organization",
+    },
+    status: {
+      type: String,
+      enum: ["Active", "Disabled"],
+      default: "Active",
+    },
   },
   { timestamps: true },
 )
