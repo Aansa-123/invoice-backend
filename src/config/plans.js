@@ -2,25 +2,41 @@ export const PLANS = {
   Free: {
     name: "Free",
     price: 0,
-    invoiceLimit: 10,
-    features: ["Basic Invoicing", "Client Management"],
+    durationDays: 36500, // Unlimited-ish
+    clientLimit: 1, // Per day
+    invoiceLimit: 1, // Per day
+    teamAllowed: false,
+    reportsAllowed: false,
+    features: ["1 Invoice per day", "1 Client per day"],
   },
-  Starter: {
-    name: "Starter",
-    price: 9,
-    invoiceLimit: Infinity,
-    features: ["Unlimited Invoices", "Client Management"],
-  },
-  Pro: {
-    name: "Pro",
+  Monthly: {
+    name: "Monthly",
     price: 19,
-    invoiceLimit: Infinity,
-    features: ["Unlimited Invoices", "Reports", "PDF Branding"],
+    durationDays: 30,
+    clientLimit: -1, // Unlimited
+    invoiceLimit: -1, // Unlimited
+    teamAllowed: true,
+    reportsAllowed: true,
+    features: ["Unlimited Invoices", "Unlimited Clients", "Team Members", "Reports"],
   },
-  Business: {
-    name: "Business",
-    price: 49,
-    invoiceLimit: Infinity,
-    features: ["Unlimited Invoices", "Team Members", "Reports", "PDF Branding"],
+  Yearly: {
+    name: "Yearly",
+    price: 199,
+    durationDays: 365,
+    clientLimit: -1, // Unlimited
+    invoiceLimit: -1, // Unlimited
+    teamAllowed: true,
+    reportsAllowed: true,
+    features: ["Unlimited Invoices", "Unlimited Clients", "Team Members", "Reports", "Priority Support"],
+  },
+  Lifetime: {
+    name: "Lifetime",
+    price: 499,
+    durationDays: 36500,
+    clientLimit: -1, // Unlimited
+    invoiceLimit: -1, // Unlimited
+    teamAllowed: true,
+    reportsAllowed: true,
+    features: ["Unlimited Invoices", "Unlimited Clients", "Team Members", "Reports", "Lifetime Access"],
   },
 }

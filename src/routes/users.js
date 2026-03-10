@@ -3,11 +3,12 @@ import User from "../models/User.js"
 import { protect } from "../middleware/auth.js"
 import { authorize } from "../middleware/rbac.js"
 import { logActivity } from "../services/logger.js"
+import { checkPlanLimits } from "../middleware/planLimits.js"
 
 const router = express.Router()
 
 // Get all team members for organization
-router.get("/team", protect, async (req, res) => {
+router.get("/team", protect, checkPlanLimits("team"), async (req, res) => {
   try {
     const orgId = req.user.currentOrganization
 
@@ -39,7 +40,7 @@ router.get("/team", protect, async (req, res) => {
 })
 
 // Invite / Add team member
-router.post("/invite", protect, authorize("Owner", "Admin"), async (req, res) => {
+router.post("/invite", protect, authorize("Owner", "Admin"), checkPlanLimits("team"), async (req, res) => {
   try {
     const { name, email, role, password } = req.body
     const orgId = req.user.currentOrganization

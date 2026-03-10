@@ -1,10 +1,108 @@
 import express from "express"
 import Stripe from "stripe"
+import multer from "multer"
+import cloudinary from "../config/cloudinary.js"
 import { protect } from "../middleware/auth.js"
 import Organization from "../models/Organization.js"
+import Plan from "../models/Plan.js"
+import OrganizationSubscription from "../models/Subscription.js"
+import SubscriptionPayment from "../models/SubscriptionPayment.js"
 
 const router = express.Router()
 const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null
+
+// Multer config for memory storage
+const storage = multer.memoryStorage()
+const upload = multer({ storage })
+
+// Mock Upgrade Plan with Manual Payment
+router.post("/upgrade", protect, upload.single("screenshot"), async (req, res) => {
+  try {
+    const { planName, paymentMethod, transactionId } = req.body
+    const organization = await Organization.findById(req.user.currentOrganization)
+
+    if (!organization) {
+      return res.status(404).json({ error: "Organization not found" })
+    }
+
+    const planObj = await Plan.findOne({ name: planName })
+    if (!planObj) {
+      return res.status(404).json({ error: "Plan not found" })
+    }
+
+    let screenshotUrl = ""
+    if (req.file) {
+      const fileStr = req.file.buffer.toString("base64")
+      const fileType = req.file.mimetype
+      const uploadResponse = await cloudinary.uploader.upload(`data:${fileType};base64,${fileStr}`, {
+        folder: "payment_screenshots",
+      })
+      screenshotUrl = uploadResponse.secure_url
+    }
+
+    const durationDays = planObj.durationDays || 30
+    const endDate = new Date()
+    endDate.setDate(endDate.getDate() + durationDays)
+
+    // Update Organization
+    await Organization.findByIdAndUpdate(req.user.currentOrganization, {
+      plan: planObj._id,
+      "subscription.status": "active",
+      "subscription.plan": planName,
+      "subscription.end": endDate,
+    })
+
+    // Create Subscription record
+    await OrganizationSubscription.create({
+      organization: organization._id,
+      plan: planObj._id,
+      paymentStatus: "Paid",
+      startDate: new Date(),
+      endDate: endDate,
+      isActive: true,
+    })
+
+    // Create SubscriptionPayment record
+    await SubscriptionPayment.create({
+      organization: organization._id,
+      plan: planObj._id,
+      amount: planObj.price,
+      status: "success",
+      paymentMethod: paymentMethod || "Manual Payment",
+      transactionId: transactionId || `MOCK-${Date.now()}`,
+      screenshot: screenshotUrl,
+      paymentDate: new Date(),
+    })
+
+    res.json({
+      success: true,
+      message: "Plan upgraded successfully",
+      data: {
+        plan: planName,
+        endDate: endDate,
+      }
+    })
+  } catch (error) {
+    console.error("Cloudinary upload error:", error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Get Subscription Payment History
+router.get("/history", protect, async (req, res) => {
+  try {
+    const history = await SubscriptionPayment.find({ 
+      organization: req.user.currentOrganization 
+    }).populate("plan").sort({ paymentDate: -1 })
+
+    res.json({
+      success: true,
+      data: history
+    })
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+})
 
 // Create Checkout Session
 router.post("/create-checkout-session", protect, async (req, res) => {

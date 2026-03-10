@@ -30,11 +30,18 @@ router.post("/register", async (req, res) => {
       return res.status(400).json({ error: "Email already exists" })
     }
 
+    // Determine role (check against .env admin credentials)
+    let role = "User"
+    if (email === process.env.ADMIN_EMAIL && password === process.env.ADMIN_PASSWORD) {
+      role = "Admin"
+    }
+
     // Create user
     user = await User.create({
       name,
       email,
       password,
+      role,
     })
 
     const token = generateToken(user._id)
@@ -66,7 +73,19 @@ router.post("/login", async (req, res) => {
     }
 
     // Check for user
-    const user = await User.findOne({ email }).select("+password")
+    let user = await User.findOne({ email }).select("+password").populate("currentOrganization")
+
+    // If user not found and matches admin credentials, create it
+    if (!user && email === process.env.ADMIN_EMAIL && password === process.env.ADMIN_PASSWORD) {
+      user = await User.create({
+        name: "Administrator",
+        email,
+        password,
+        role: "Admin",
+      })
+      // Re-fetch to get all fields correctly
+      user = await User.findById(user._id).select("+password").populate("currentOrganization")
+    }
 
     if (!user) {
       return res.status(401).json({ error: "Invalid credentials" })
@@ -75,6 +94,11 @@ router.post("/login", async (req, res) => {
     // Check if user is disabled
     if (user.status === "Disabled") {
       return res.status(403).json({ error: "Your account has been disabled. Please contact your administrator." })
+    }
+
+    // Check if organization subscription is disabled (only for non-Admins)
+    if (user.role !== "Admin" && user.currentOrganization?.subscription?.status === "disabled") {
+      return res.status(403).json({ error: "Subscription disabled by admin. Contact support." })
     }
 
     // Check if password matches
@@ -105,7 +129,8 @@ router.post("/login", async (req, res) => {
         name: user.name,
         email: user.email,
         currentOrganization: user.currentOrganization,
-        role,
+        role: user.role,
+        orgRole: role,
       },
     })
   } catch (error) {
@@ -123,27 +148,65 @@ router.get("/me", async (req, res) => {
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET)
-    const user = await User.findById(decoded.id)
+    let user = await User.findById(decoded.id).populate("organizations.organizationId")
 
     if (!user) {
       return res.status(401).json({ error: "User not found" })
     }
 
+    // Populate current organization manually to ensure it's fresh
+    if (user.currentOrganization) {
+      user.currentOrganization = await Organization.findById(user.currentOrganization)
+    } else if (user.organizations && user.organizations.length > 0) {
+      user.currentOrganization = await Organization.findById(user.organizations[0].organizationId._id || user.organizations[0].organizationId)
+    }
+
+    // Check if organization subscription is disabled (only for non-Admins)
+    if (user.role !== "Admin" && user.currentOrganization?.subscription?.status === "disabled") {
+      return res.status(403).json({ error: "Subscription disabled by admin. Contact support." })
+    }
+
     let role = "Owner"
     if (user.currentOrganization && user.organizations) {
       const membership = user.organizations.find(
-        (o) => o.organizationId?.toString() === user.currentOrganization.toString()
+        (o) => o.organizationId?.toString() === user.currentOrganization._id.toString()
       )
       if (membership) role = membership.role
     } else if (user.organizations && user.organizations.length > 0) {
       role = user.organizations[0].role
     }
 
+    const planName = user.currentOrganization?.subscription?.plan || "Free"
+    const subscriptionEnd = user.currentOrganization?.subscription?.end
+    const subscriptionStatus = user.currentOrganization?.subscription?.status
+    
+    let currentPlan = planName
+    let isExpired = false
+    
+    // If plan is not Free and status is active, check if it has expired
+    if (planName !== "Free" && subscriptionStatus === "active" && subscriptionEnd && new Date(subscriptionEnd) < new Date()) {
+      currentPlan = "Free"
+      isExpired = true
+
+      // Update organization status to expired
+      if (user.currentOrganization) {
+        await Organization.findByIdAndUpdate(user.currentOrganization._id, {
+          "subscription.status": "expired"
+        })
+      }
+    } else if (subscriptionStatus !== "active" && planName !== "Free") {
+      // If status is not active (e.g., canceled, expired, past_due), revert to Free
+      currentPlan = "Free"
+    }
+
     res.status(200).json({
       success: true,
       user: {
         ...user.toObject(),
-        role
+        role: user.role,
+        orgRole: role,
+        plan: currentPlan,
+        isSubscriptionExpired: isExpired,
       },
     })
   } catch (error) {

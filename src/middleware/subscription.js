@@ -1,60 +1,37 @@
 import Organization from "../models/Organization.js"
-import Invoice from "../models/Invoice.js"
-import Subscription from "../models/Subscription.js"
 
-export const checkSubscriptionLimit = async (req, res, next) => {
+export const checkSubscription = async (req, res, next) => {
   try {
+    // Admins are exempt from subscription checks
+    if (req.user.role === "Admin") {
+      return next()
+    }
+
     const organization = await Organization.findById(req.user.currentOrganization)
 
     if (!organization) {
       return res.status(404).json({ error: "Organization not found" })
     }
 
-    const plan = organization.subscription.plan
+    const status = organization.subscription?.status || "active"
+    const planName = organization.subscription?.plan || "Free"
+    const expiry = organization.subscription?.end
 
-    // Free plan: Limit to 10 invoices per month
-    if (plan === "Free") {
-      const now = new Date()
-      const firstDayOfMonth = new Date(now.getFullYear(), now.getMonth(), 1)
-      
-      const invoiceCount = await Invoice.countDocuments({
-        organizationId: organization._id,
-        createdAt: { $gte: firstDayOfMonth }
+    // Check if manually disabled
+    if (status === "disabled") {
+      return res.status(403).json({ 
+        error: "Subscription disabled by admin. Contact support.",
+        subscriptionDisabled: true 
       })
-
-      if (invoiceCount >= 10) {
-        return res.status(403).json({
-          error: "Monthly invoice limit reached for Free plan. Please upgrade to Starter or Pro.",
-          limitReached: true
-        })
-      }
     }
 
-    next()
-  } catch (error) {
-    res.status(500).json({ error: error.message })
-  }
-}
-
-export const verifySubscription = async (req, res, next) => {
-  try {
-    const { subscriptionId } = req.params
-    
-    if (!subscriptionId) {
-      return res.status(400).json({ error: "Subscription ID is required" })
+    // Check if expired
+    if (planName !== "Free" && expiry && new Date(expiry) < new Date()) {
+      // For expired pro plans, we allow access but with Free limits (handled by checkPlanLimits)
+      // If the user wants to HARD BLOCK features when expired, we would return error here.
+      // Based on architecture, we revert to Free limits.
     }
 
-    const subscription = await Subscription.findOne({
-      _id: subscriptionId,
-      userId: req.user._id,
-      status: "active"
-    })
-
-    if (!subscription) {
-      return res.status(403).json({ error: "No active subscription found for this product." })
-    }
-
-    req.subscription = subscription
     next()
   } catch (error) {
     res.status(500).json({ error: error.message })

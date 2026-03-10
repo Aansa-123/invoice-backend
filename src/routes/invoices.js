@@ -96,7 +96,7 @@ router.get("/:id", protect, async (req, res) => {
 })
 
 // Create invoice
-router.post("/", protect, authorize("Owner", "Admin", "Accountant"), checkPlanLimits, async (req, res) => {
+router.post("/", protect, authorize("Owner", "Admin", "Accountant"), checkPlanLimits("invoice"), async (req, res) => {
   try {
     const { clientId, items, tax, discount, dueDate, invoiceDate, notes } = req.body
 
@@ -248,6 +248,15 @@ router.put("/:id", protect, authorize("Owner", "Admin", "Accountant"), async (re
     await invoice.save()
 
     const populatedInvoice = await Invoice.findById(invoice._id).populate("clientId")
+
+    // Log activity
+    await logActivity({
+      userId: req.user._id,
+      organizationId: req.user.currentOrganization,
+      action: `Updated invoice ${invoice.invoiceNumber}`,
+      module: "Invoices",
+      metadata: { invoiceId: invoice._id }
+    })
 
     res.status(200).json({
       success: true,

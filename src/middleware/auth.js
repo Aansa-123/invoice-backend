@@ -1,5 +1,6 @@
 import jwt from "jsonwebtoken"
 import User from "../models/User.js"
+import Organization from "../models/Organization.js"
 
 export const protect = async (req, res, next) => {
   let token
@@ -16,15 +17,21 @@ export const protect = async (req, res, next) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET)
     
     // Fetch user and populate current organization
-    const user = await User.findById(decoded.id).select("-password")
+    const user = await User.findById(decoded.id).select("-password").populate("organizations.organizationId")
     
     if (!user) {
       return res.status(401).json({ error: "User not found" })
     }
 
+    // Allow user to create first organization or switch
+    const isOrgCreate = (req.baseUrl === "/api/organizations" && req.method === "POST" && req.path === "/") || req.originalUrl.endsWith("/api/organizations")
+    const isOrgSwitch = req.originalUrl.includes("/organizations/switch")
+    const isOrgList = (req.baseUrl === "/api/organizations" && req.method === "GET") || req.originalUrl === "/api/organizations"
+    const isMeRoute = req.originalUrl.includes("/api/auth/me")
+    const isAdminRoute = req.originalUrl.includes("/api/admin")
+
     if (!user.currentOrganization) {
-      // Allow user to create organization if they don't have one
-      if (req.baseUrl === "/api/organizations" && req.method === "POST") {
+      if (isOrgCreate) {
         req.user = user
         return next()
       }
@@ -33,24 +40,34 @@ export const protect = async (req, res, next) => {
         const organizationId = user.organizations[0].organizationId
         user.currentOrganization = organizationId
         await user.save()
-      } else {
+      } else if (!isAdminRoute) {
         return res.status(400).json({ 
           error: "No organization associated with this user",
-          userId: user._id,
-          email: user.email,
-          orgCount: user.organizations ? user.organizations.length : 0,
           needsSetup: true
         })
       }
     }
 
+    // Check organization approval status (if not an admin route or switching)
+    if (user.currentOrganization && !isAdminRoute && !isOrgSwitch && !isOrgCreate && !isMeRoute && !isOrgList) {
+      const organization = await Organization.findById(user.currentOrganization)
+      if (organization && organization.status !== "approved") {
+        return res.status(403).json({ 
+          error: "Organization pending approval", 
+          status: organization.status,
+          orgName: organization.name
+        })
+      }
+    }
+
     // Attach role in current organization
-    const orgMembership = user.organizations.find(
-      (org) => org.organizationId.toString() === user.currentOrganization.toString()
-    )
+    const orgMembership = user.organizations.find(org => {
+      const orgId = org.organizationId._id ? org.organizationId._id.toString() : org.organizationId.toString()
+      return orgId === user.currentOrganization.toString()
+    })
     
     req.user = user
-    req.user.role = orgMembership ? orgMembership.role : "Viewer"
+    req.orgRole = orgMembership ? orgMembership.role : "Viewer"
     
     next()
   } catch (error) {

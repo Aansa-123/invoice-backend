@@ -2,11 +2,13 @@ import express from "express"
 import Invoice from "../models/Invoice.js"
 import Client from "../models/Client.js"
 import { protect } from "../middleware/auth.js"
+import { checkSubscription } from "../middleware/subscription.js"
+import { checkPlanLimits } from "../middleware/planLimits.js"
 
 const router = express.Router()
 
 // Get reports data for organization
-router.get("/", protect, async (req, res) => {
+router.get("/", protect, checkSubscription, checkPlanLimits("reports"), async (req, res) => {
   try {
     const organizationId = req.user.currentOrganization
 

@@ -25,16 +25,33 @@ const organizationSchema = new mongoose.Schema(
       ref: "User",
       required: true,
     },
+    status: {
+      type: String,
+      enum: ["pending", "approved", "rejected"],
+      default: "pending",
+    },
+    approvedByAdmin: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
+    plan: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Plan",
+    },
     subscription: {
-      plan: {
-        type: String,
-        enum: ["Free", "Starter", "Pro", "Business"],
-        default: "Free",
-      },
       status: {
         type: String,
-        enum: ["active", "past_due", "canceled", "incomplete"],
+        enum: ["active", "past_due", "canceled", "incomplete", "grace_period", "expired"],
         default: "active",
+      },
+      plan: {
+        type: String,
+        default: "Free",
+      },
+      end: Date,
+      graceDays: {
+        type: Number,
+        default: 0,
       },
       stripeCustomerId: String,
       stripeSubscriptionId: String,

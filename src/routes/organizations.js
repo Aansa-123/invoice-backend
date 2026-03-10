@@ -1,15 +1,22 @@
 import express from "express"
 import Organization from "../models/Organization.js"
+import Plan from "../models/Plan.js"
 import CompanySettings from "../models/CompanySettings.js"
 import { protect } from "../middleware/auth.js"
+import pusher from "../utils/pusher.js"
 
 const router = express.Router()
 
 // Get all organizations for current user
 router.get("/", protect, async (req, res) => {
   try {
+    const orgIds = req.user.organizations.map(o => {
+      if (!o.organizationId) return null
+      return o.organizationId._id || o.organizationId
+    }).filter(id => id !== null)
+
     const orgs = await Organization.find({
-      _id: { $in: req.user.organizations.map(o => o.organizationId) }
+      _id: { $in: orgIds }
     })
     res.status(200).json({
       success: true,
@@ -29,6 +36,13 @@ router.post("/", protect, async (req, res) => {
       return res.status(400).json({ error: "Organization name and business email are required" })
     }
 
+    // Find the Free plan
+    const freePlan = await Plan.findOne({ name: "Free" })
+
+    // If it's the user's first organization, approve it automatically
+    const isFirstOrg = req.user.organizations.length === 0
+    const status = isFirstOrg ? "approved" : "pending"
+
     const org = await Organization.create({
       name,
       email,
@@ -37,7 +51,13 @@ router.post("/", protect, async (req, res) => {
       currency: currency || "USD",
       taxNumber,
       logo,
-      owner: req.user._id
+      owner: req.user._id,
+      plan: freePlan ? freePlan._id : null,
+      status: status,
+      subscription: {
+        plan: "Free", // Redundant but good for existing logic
+        status: "active",
+      }
     })
 
     // Add to user's organizations
@@ -62,6 +82,22 @@ router.post("/", protect, async (req, res) => {
       { upsert: true, new: true, runValidators: true }
     )
 
+    // Send notification to admin if it's pending
+    if (status === "pending") {
+      try {
+        await pusher.trigger("admin-channel", "new-org-request", {
+          organizationId: org._id,
+          name: org.name,
+          owner: req.user.name,
+          email: org.email,
+          message: `New organization request from ${req.user.name}: ${org.name}`
+        })
+      } catch (pusherErr) {
+        console.error("Pusher notification failed", pusherErr)
+        // We don't want to fail the whole request just because notification failed
+      }
+    }
+
     res.status(201).json({
       success: true,
       data: org
@@ -77,9 +113,10 @@ router.post("/switch/:id", protect, async (req, res) => {
     const orgId = req.params.id
 
     // Check if user belongs to this organization
-    const belongs = req.user.organizations.find(
-      o => o.organizationId.toString() === orgId
-    )
+    const belongs = req.user.organizations.find(o => {
+      const orgIdInUser = o.organizationId._id ? o.organizationId._id.toString() : o.organizationId.toString()
+      return orgIdInUser === orgId
+    })
 
     if (!belongs) {
       return res.status(403).json({ error: "You do not belong to this organization" })

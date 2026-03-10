@@ -3,6 +3,7 @@ import Client from "../models/Client.js"
 import Invoice from "../models/Invoice.js"
 import { protect } from "../middleware/auth.js"
 import { authorize } from "../middleware/rbac.js"
+import { checkPlanLimits } from "../middleware/planLimits.js"
 import { logActivity } from "../services/logger.js"
 
 const router = express.Router()
@@ -57,7 +58,7 @@ router.get("/:id", protect, async (req, res) => {
 })
 
 // Create client
-router.post("/", protect, authorize("Owner", "Admin", "Accountant"), async (req, res) => {
+router.post("/", protect, authorize("Owner", "Admin", "Accountant"), checkPlanLimits("client"), async (req, res) => {
   try {
     const { name, email, phone, address } = req.body
 
@@ -105,6 +106,15 @@ router.put("/:id", protect, authorize("Owner", "Admin", "Accountant"), async (re
     client = await Client.findByIdAndUpdate(req.params.id, req.body, {
       new: true,
       runValidators: true,
+    })
+
+    // Log activity
+    await logActivity({
+      userId: req.user._id,
+      organizationId: req.user.currentOrganization,
+      action: `Updated client: ${client.name}`,
+      module: "Clients",
+      metadata: { clientId: client._id }
     })
 
     res.status(200).json({

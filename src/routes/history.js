@@ -1,11 +1,12 @@
 import express from "express"
 import ActivityLog from "../models/ActivityLog.js"
 import { protect } from "../middleware/auth.js"
+import { checkSubscription } from "../middleware/subscription.js"
 
 const router = express.Router()
 
 // Get all activity logs for organization
-router.get("/", protect, async (req, res) => {
+router.get("/", protect, checkSubscription, async (req, res) => {
   try {
     const logs = await ActivityLog.find({ organizationId: req.user.currentOrganization })
       .populate("userId", "name email")
