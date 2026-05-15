@@ -44,6 +44,10 @@ const companySettingsSchema = new mongoose.Schema(
       type: String,
       default: "Due on Receipt",
     },
+    defaultNotes: {
+      type: String,
+      default: "",
+    },
   },
   { timestamps: true },
 )

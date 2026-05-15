@@ -5,7 +5,6 @@ import Plan from "../models/Plan.js"
 import SubscriptionPayment from "../models/SubscriptionPayment.js"
 import { protect } from "../middleware/auth.js"
 import { authorize } from "../middleware/rbac.js"
-import pusher from "../utils/pusher.js"
 
 const router = express.Router()
 
@@ -121,18 +120,6 @@ router.patch("/organizations/:id/approve", protect, isAdmin, async (req, res) =>
     organization.approvedByAdmin = req.user._id
     await organization.save()
 
-    // Notify user
-    try {
-      await pusher.trigger(`user-${organization.owner}-channel`, "org-status-updated", {
-        organizationId: organization._id,
-        name: organization.name,
-        status: "approved",
-        message: `Your organization "${organization.name}" has been approved!`
-      })
-    } catch (pusherErr) {
-      console.error("Pusher notification failed", pusherErr)
-    }
-
     res.json({ success: true, message: "Organization approved successfully", data: organization })
   } catch (error) {
     res.status(500).json({ error: error.message })
@@ -151,17 +138,10 @@ router.patch("/organizations/:id/reject", protect, isAdmin, async (req, res) => 
     organization.status = "rejected"
     await organization.save()
 
-    // Notify user
-    try {
-      await pusher.trigger(`user-${organization.owner}-channel`, "org-status-updated", {
-        organizationId: organization._id,
-        name: organization.name,
-        status: "rejected",
-        message: `Your organization "${organization.name}" was rejected.`
-      })
-    } catch (pusherErr) {
-      console.error("Pusher notification failed", pusherErr)
-    }
+    // Also remove from user's organizations list to fully hide it
+    await User.findByIdAndUpdate(organization.owner, {
+      $pull: { organizations: { organizationId: organization._id } }
+    })
 
     res.json({ success: true, message: "Organization rejected", data: organization })
   } catch (error) {
@@ -270,9 +250,18 @@ router.get("/plans", protect, isAdmin, async (req, res) => {
   }
 })
 
+const getDurationDays = (type, durationDays) => {
+  if (type === "Monthly") return 30;
+  if (type === "Yearly") return 365;
+  if (type === "Lifetime" || type === "Free") return 99999;
+  return durationDays || 30;
+};
+
 router.post("/plans", protect, isAdmin, async (req, res) => {
   try {
-    const plan = await Plan.create(req.body)
+    const planData = { ...req.body };
+    planData.durationDays = getDurationDays(planData.type, planData.durationDays);
+    const plan = await Plan.create(planData)
     res.status(201).json({ success: true, data: plan })
   } catch (error) {
     res.status(400).json({ error: error.message })
@@ -281,7 +270,11 @@ router.post("/plans", protect, isAdmin, async (req, res) => {
 
 router.put("/plans/:id", protect, isAdmin, async (req, res) => {
   try {
-    const plan = await Plan.findByIdAndUpdate(req.params.id, req.body, { new: true })
+    const planData = { ...req.body };
+    if (planData.type) {
+      planData.durationDays = getDurationDays(planData.type, planData.durationDays);
+    }
+    const plan = await Plan.findByIdAndUpdate(req.params.id, planData, { new: true })
     res.json({ success: true, data: plan })
   } catch (error) {
     res.status(400).json({ error: error.message })
@@ -296,6 +289,61 @@ router.get("/payments", protect, isAdmin, async (req, res) => {
       .populate("plan", "name")
       .sort("-paymentDate")
     res.json({ success: true, data: payments })
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// --- Growth Stats ---
+router.get("/growth", protect, isAdmin, async (req, res) => {
+  try {
+    const thirtyDaysAgo = new Date()
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
+    thirtyDaysAgo.setHours(0, 0, 0, 0)
+
+    // Aggregate Organizations per day
+    const orgsGrowth = await Organization.aggregate([
+      { $match: { createdAt: { $gte: thirtyDaysAgo } } },
+      {
+        $group: {
+          _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+          count: { $sum: 1 }
+        }
+      },
+      { $sort: { _id: 1 } }
+    ])
+
+    // Aggregate Payments per day
+    const revenueGrowth = await SubscriptionPayment.aggregate([
+      { $match: { status: "success", paymentDate: { $gte: thirtyDaysAgo } } },
+      {
+        $group: {
+          _id: { $dateToString: { format: "%Y-%m-%d", date: "$paymentDate" } },
+          amount: { $sum: "$amount" }
+        }
+      },
+      { $sort: { _id: 1 } }
+    ])
+
+    // Merge data for the last 30 days
+    const chartData = []
+    for (let i = 0; i <= 30; i++) {
+      const date = new Date(thirtyDaysAgo)
+      date.setDate(date.getDate() + i)
+      const dateStr = date.toISOString().split('T')[0]
+      
+      const orgData = orgsGrowth.find(o => o._id === dateStr)
+      const revData = revenueGrowth.find(r => r._id === dateStr)
+      
+      chartData.push({
+        date: dateStr,
+        day: date.toLocaleDateString('en-US', { weekday: 'short' }),
+        growth: orgData ? orgData.count : 0,
+        revenue: revData ? revData.amount : 0
+      })
+    }
+
+    res.json({ success: true, data: chartData })
   } catch (error) {
     res.status(500).json({ error: error.message })
   }

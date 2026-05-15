@@ -20,6 +20,14 @@ const organizationSchema = new mongoose.Schema(
     },
     taxNumber: String,
     logo: String,
+    defaultTaxRate: {
+      type: Number,
+      default: 0
+    },
+    defaultNotes: {
+      type: String,
+      default: ""
+    },
     owner: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -61,6 +69,14 @@ const organizationSchema = new mongoose.Schema(
       address: String,
       phone: String,
       email: String,
+      defaultTaxRate: {
+        type: Number,
+        default: 0
+      },
+      defaultNotes: {
+        type: String,
+        default: ""
+      }
     },
   },
   { timestamps: true },

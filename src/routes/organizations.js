@@ -3,7 +3,6 @@ import Organization from "../models/Organization.js"
 import Plan from "../models/Plan.js"
 import CompanySettings from "../models/CompanySettings.js"
 import { protect } from "../middleware/auth.js"
-import pusher from "../utils/pusher.js"
 
 const router = express.Router()
 
@@ -16,7 +15,8 @@ router.get("/", protect, async (req, res) => {
     }).filter(id => id !== null)
 
     const orgs = await Organization.find({
-      _id: { $in: orgIds }
+      _id: { $in: orgIds },
+      status: { $ne: "rejected" }
     })
     res.status(200).json({
       success: true,
@@ -81,22 +81,6 @@ router.post("/", protect, async (req, res) => {
       },
       { upsert: true, new: true, runValidators: true }
     )
-
-    // Send notification to admin if it's pending
-    if (status === "pending") {
-      try {
-        await pusher.trigger("admin-channel", "new-org-request", {
-          organizationId: org._id,
-          name: org.name,
-          owner: req.user.name,
-          email: org.email,
-          message: `New organization request from ${req.user.name}: ${org.name}`
-        })
-      } catch (pusherErr) {
-        console.error("Pusher notification failed", pusherErr)
-        // We don't want to fail the whole request just because notification failed
-      }
-    }
 
     res.status(201).json({
       success: true,

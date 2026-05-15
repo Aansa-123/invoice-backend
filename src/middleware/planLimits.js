@@ -27,10 +27,11 @@ export const checkPlanLimits = (resourceType) => async (req, res, next) => {
       req.subscriptionExpired = true // Flag for later use if needed
     }
 
-    const plan = PLANS[planName]
+    let plan = PLANS[planName]
 
     if (!plan) {
-      return res.status(500).json({ error: "Plan configuration not found" })
+      console.warn(`Plan ${planName} not found, defaulting to Free`)
+      plan = PLANS["Free"]
     }
 
     const startOfDay = new Date()

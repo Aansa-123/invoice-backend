@@ -13,13 +13,26 @@ router.get("/", protect, async (req, res) => {
   try {
     const clients = await Client.find({ organizationId: req.user.currentOrganization })
     
-    // Get invoice count for each client
+    // Get invoice count and revenue for each client
     const clientsWithStats = await Promise.all(
       clients.map(async (client) => {
-        const totalInvoices = await Invoice.countDocuments({ clientId: client._id })
+        const stats = await Invoice.aggregate([
+          { $match: { clientId: client._id } },
+          {
+            $group: {
+              _id: null,
+              totalInvoices: { $sum: 1 },
+              totalRevenue: { $sum: "$total" }
+            }
+          }
+        ])
+
+        const clientStats = stats[0] || { totalInvoices: 0, totalRevenue: 0 }
+
         return {
           ...client.toObject(),
-          totalInvoices
+          totalInvoices: clientStats.totalInvoices,
+          totalRevenue: clientStats.totalRevenue
         }
       })
     )

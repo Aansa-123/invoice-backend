@@ -39,4 +39,14 @@ export const PLANS = {
     reportsAllowed: true,
     features: ["Unlimited Invoices", "Unlimited Clients", "Team Members", "Reports", "Lifetime Access"],
   },
+  Pro: {
+    name: "Pro",
+    price: 19,
+    durationDays: 30,
+    clientLimit: -1, // Unlimited
+    invoiceLimit: -1, // Unlimited
+    teamAllowed: true,
+    reportsAllowed: true,
+    features: ["Unlimited Invoices", "Unlimited Clients", "Team Members", "Reports"],
+  },
 }

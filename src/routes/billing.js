@@ -15,6 +15,16 @@ const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SEC
 const storage = multer.memoryStorage()
 const upload = multer({ storage })
 
+// Get all active plans
+router.get("/plans", protect, async (req, res) => {
+  try {
+    const plans = await Plan.find({ isActive: true })
+    res.json({ success: true, data: plans })
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+})
+
 // Mock Upgrade Plan with Manual Payment
 router.post("/upgrade", protect, upload.single("screenshot"), async (req, res) => {
   try {
