@@ -48,6 +48,10 @@ const companySettingsSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
+    categories: {
+      type: [String],
+      default: ["General"],
+    },
   },
   { timestamps: true },
 )

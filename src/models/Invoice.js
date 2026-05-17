@@ -24,9 +24,18 @@ const invoiceSchema = new mongoose.Schema(
     },
     items: [
       {
+        productId: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "Product",
+        },
         name: String,
         quantity: Number,
         price: Number,
+        unit: String,
+        conversionFactor: {
+          type: Number,
+          default: 1,
+        },
         _id: false,
       },
     ],
@@ -50,6 +59,10 @@ const invoiceSchema = new mongoose.Schema(
       type: String,
       enum: ["Paid", "Pending", "Overdue"],
       default: "Pending",
+    },
+    isDraft: {
+      type: Boolean,
+      default: false,
     },
     invoiceDate: {
       type: Date,

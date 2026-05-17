@@ -1,6 +1,7 @@
 import express from "express"
 import Invoice from "../models/Invoice.js"
 import Client from "../models/Client.js"
+import Product from "../models/Product.js"
 import CompanySettings from "../models/CompanySettings.js"
 import { protect } from "../middleware/auth.js"
 import { authorize } from "../middleware/rbac.js"
@@ -98,7 +99,7 @@ router.get("/:id", protect, async (req, res) => {
 // Create invoice
 router.post("/", protect, authorize("Owner", "Admin", "Accountant"), checkPlanLimits("invoice"), async (req, res) => {
   try {
-    const { clientId, items, tax, discount, dueDate, invoiceDate, notes } = req.body
+    const { clientId, items, tax, discount, dueDate, invoiceDate, notes, isDraft } = req.body
 
     // Validation
     if (!clientId || clientId.trim() === "") {
@@ -164,7 +165,20 @@ router.post("/", protect, authorize("Owner", "Admin", "Accountant"), checkPlanLi
       invoiceDate: invoiceDate || Date.now(),
       dueDate,
       notes: notes || "",
+      isDraft: isDraft || false,
     })
+
+    // Deduct stock if not a draft
+    if (!invoice.isDraft) {
+      for (const item of invoice.items) {
+        if (item.productId) {
+          const totalPcs = item.quantity * (item.conversionFactor || 1)
+          await Product.findByIdAndUpdate(item.productId, {
+            $inc: { quantity: -totalPcs }
+          })
+        }
+      }
+    }
 
     const populatedInvoice = await Invoice.findById(invoice._id).populate("clientId")
 
@@ -201,7 +215,7 @@ router.put("/:id", protect, authorize("Owner", "Admin", "Accountant"), async (re
       return res.status(403).json({ error: "Not authorized to update this invoice" })
     }
 
-    const { clientId, items, tax, discount, dueDate, notes } = req.body
+    const { clientId, items, tax, discount, dueDate, notes, isDraft } = req.body
 
     // Cannot edit Paid invoices
     if (invoice.status === "Paid") {
@@ -235,7 +249,24 @@ router.put("/:id", protect, authorize("Owner", "Admin", "Accountant"), async (re
       invoice.discount = Number(discount) || 0
     }
 
+    const wasDraft = invoice.isDraft
+    if (isDraft !== undefined) {
+      invoice.isDraft = isDraft
+    }
+
     invoice.total = invoice.subtotal + invoice.tax - invoice.discount
+
+    // Deduct stock if it was a draft and now it's NOT (only if it's being confirmed)
+    if (wasDraft && !invoice.isDraft) {
+      for (const item of invoice.items) {
+        if (item.productId) {
+          const totalPcs = item.quantity * (item.conversionFactor || 1)
+          await Product.findByIdAndUpdate(item.productId, {
+            $inc: { quantity: -totalPcs }
+          })
+        }
+      }
+    }
 
     // invoiceDate is read-only according to requirements
     if (dueDate) invoice.dueDate = dueDate

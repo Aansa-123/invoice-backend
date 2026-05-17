@@ -13,6 +13,7 @@ import companyRoutes from "./routes/company.js"
 import organizationRoutes from "./routes/organizations.js"
 import billingRoutes from "./routes/billing.js"
 import adminRoutes from "./routes/admin.js"
+import productRoutes from "./routes/products.js"
 import { errorHandler } from "./middleware/errorHandler.js"
 
 dotenv.config()
@@ -48,6 +49,7 @@ app.use("/api/company", companyRoutes)
 app.use("/api/organizations", organizationRoutes)
 app.use("/api/billing", billingRoutes)
 app.use("/api/admin", adminRoutes)
+app.use("/api/products", productRoutes)
 
 // Debug: list registered routes
 app._router.stack

@@ -36,6 +36,19 @@ router.post("/", protect, authorize("Owner", "Admin", "Accountant"), async (req,
       return res.status(404).json({ error: "Invoice not found" })
     }
 
+    // 1.1 Status checks
+    if (invoice.isDraft) {
+      return res.status(400).json({ error: "Cannot record payment for a draft order. Please generate the invoice first." })
+    }
+
+    if (invoice.status === "Paid") {
+      return res.status(400).json({ error: "This invoice is already fully paid." })
+    }
+
+    if (invoice.status === "Overdue") {
+      return res.status(400).json({ error: "Cannot record payment for an overdue invoice." })
+    }
+
     // 2. Create payment record
     const payment = await Payment.create({
       userId: req.user._id,
